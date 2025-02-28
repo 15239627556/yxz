@@ -6,78 +6,53 @@
 # License: Some License (e.g., MIT)
 # =============================================================================
 import json
-import time
+from urllib.parse import urlencode, urlparse
 
 import scrapy
 from bs4 import BeautifulSoup
 from scrapy import Request
 from scrapy.exceptions import CloseSpider
-from scrapy.linkextractors import LinkExtractor
-from urllib.parse import urlencode
-print(f'scrapy_version: {scrapy.__version__}')
 
 from GoogleImageSpider.items import GoogleImageItem, HrefImageItem
+from GoogleImageSpider.configuration import googleSettings
 
 
 class GoogleImageSpider(scrapy.Spider):
-    name = "googleImageSpider"  # 爬虫名称
-    allowed_domains = ['googleapis.com', 'baidu.com']  # 允许爬取的域名
-    domain_delay = 20  # 同一域名请求间隔时间
-    redis_key = 'crawler:image_contextLink'  # Redis任务队列键名
-    SEARCH_QUERY = '红细胞'  # 搜索关键词
-    cx = '260207ac67ef144f4'  # 替换为你的Custom Search ID
-    api_key = 'AIzaSyDbOd586kF3mt1GmpBP3_T84Q01a0E-x1o'  # 替换为你的API密钥
-
-    # custom_settings = {
-    #     'DUPEFILTER_CLASS': 'scrapy_redis.dupefilter.RFPDupeFilter',
-    #     'SCHEDULER': 'scrapy_redis.scheduler.Scheduler',
-    #     'REDIS_URL': 'redis://localhost:6379',
-    #     'MONGODB_URI': 'mongodb://localhost:27017',
-    #     'MONGODB_DB': 'image_scraper',
-    #     'LOG_LEVEL': 'INFO',
-    #     'DOWNLOAD_DELAY': 20,
-    #     'AUTOTHROTTLE_ENABLED': True,
-    #     'RETRY_ENABLED': True,
-    #     'RETRY_TIMES': 5,
-    #     'RETRY_HTTP_CODES': [400, 403, 408, 429, 500, 502, 503, 504],
-    # }
-
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-    #     # self.NUM_RESULTS = 10  # 获取的图片数量
-    #     self.SEARCH_QUERY = '红细胞'  # 搜索关键词
-    #     self.cx = '260207ac67ef144f4'  # 替换为你的Custom Search ID
-    #     self.api_key = 'AIzaSyDbOd586kF3mt1GmpBP3_T84Q01a0E-x1o'  # 替换为你的API密钥
+    name = "GoogleImageSpider"
+    domain_delay = 20
+    redis_key = 'crawler:image_contextLink'
+    SEARCH_QUERY = '红细胞'
+    CX = googleSettings.get_cx()
+    API_KEY = googleSettings.get_api_key()
+    API_URL = "https://www.googleapis.com/customsearch/v1"
 
     def start_requests(self):
         self.logger.info("✅ Start requests triggered")
-        api_url = "https://www.googleapis.com/customsearch/v1?"
+        api_url = "https://www.googleapis.com/customsearch/v1"
         params = {
             'q': self.SEARCH_QUERY,  # searchTerms
-            'cx': self.cx,  # custom search engine ID, cx
-            'key': self.api_key,  # API key
-            'searchType': 'image',  # 指定搜索类型为图片
+            'cx': self.CX,  # custom search engine ID, cx
+            'key': self.API_KEY,  # API key
+            'searchType': r'image',  # 指定搜索类型为图片
             'start': 1,  # startIndex
             'num': 10,  # count
             'safe': 'off',  # safe
             'inputEncoding': 'utf8',  # inputEncoding
             'outputEncoding': 'utf8'  # outputEncoding
         }
-        # url = api_url + urlencode(params)
-        url = 'https://www.baidu.com'
-        request = scrapy.Request(url=url, callback=self.parse_href_images, errback=self.handle_error)
-        # self.crawler.signals.connect(
-        #     lambda response: self.logger.debug(f"🔥 Signal: {response.status} from {response.url}"),
-        #     signal=scrapy.signals.response_received
-        # )
-        self.logger.info(f"✅ Start requests triggered: {url}")
+        new_url = f"{api_url}?{urlencode(params)}"
+        request = scrapy.Request(
+            url=new_url,
+            callback=self.parse,
+            errback=self.handle_error,
+            # meta={'params': params}
+        )
         yield request
 
     def parse(self, response):
-        print(1111)
         # 解析 API 返回的 JSON 数据
+        # 查看请求的结果
         data = json.loads(response.text)
-        print(data)
         for item in data.get('items', []):
             image_item = GoogleImageItem()
             image_item['title'] = item.get('title')
@@ -93,6 +68,7 @@ class GoogleImageSpider(scrapy.Spider):
             image_item['image_width'] = item.get('image', {}).get('width')
             image_item['image_byteSize'] = item.get('image', {}).get('byteSize')
             image_item['image_thumbnailLink'] = item.get('image', {}).get('thumbnailLink')
+            image_item['category'] = "GoogleImage"
             yield image_item
 
             # 发起对image_contextLink的请求
@@ -106,21 +82,21 @@ class GoogleImageSpider(scrapy.Spider):
                 )
         # 先注释掉
         # 处理分页
-        # next_page = data.get('queries', {}).get('nextPage', [])
-        # if next_page:
-        #     api_url = "https://www.googleapis.com/customsearch/v1?"
-        #     params = {
-        #         'q': self.SEARCH_QUERY,  # searchTerms
-        #         'cx': self.cx,  # custom search engine ID, cx
-        #         'key': self.api_key,  # API key
-        #         'searchType': 'image',  # 指定搜索类型为图片
-        #         'start': next_page[0].get('startIndex', 1),  # startIndex
-        #         'num': next_page[0].get('count', 10),  # count
-        #         'safe': 'off',  # safe
-        #         'inputEncoding': 'utf8',  # inputEncoding
-        #         'outputEncoding': 'utf8'  # outputEncoding
-        #     }
-        #     yield scrapy.FormRequest(url=api_url + urlencode(params), callback=self.parse, errback=self.handle_error)
+        next_page = data.get('queries', {}).get('nextPage', [])
+        if next_page:
+            params = {
+                'q': self.SEARCH_QUERY,  # searchTerms
+                'cx': self.CX,  # custom search engine ID, cx
+                'key': self.API_KEY,  # API key
+                'searchType': 'image',  # 指定搜索类型为图片
+                'start': next_page[0].get('startIndex'),  # startIndex
+                'num': next_page[0].get('count', 10),  # count
+                'safe': 'off',  # safe
+                'inputEncoding': 'utf8',  # inputEncoding
+                'outputEncoding': 'utf8'  # outputEncoding
+            }
+            yield scrapy.FormRequest(url=self.API_URL + urlencode(params), callback=self.parse,
+                                     errback=self.handle_error)
 
     def parse_href_images(self, response):
         """解析从 image_contextLink 中提取的图片及递归页面链接"""
@@ -129,28 +105,30 @@ class GoogleImageSpider(scrapy.Spider):
         self.logger.info(f"Processing depth {current_depth}: {response.url}")
 
         # 1. 提取图片资源（img标签的src）
-        img_extractor = LinkExtractor(tags="img", attrs="src")
-        for link in img_extractor.extract_links(response):
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for img in soup.find_all('img'):
             href_image = HrefImageItem()
-            href_image["link"] = link.url
+            image_link = img.get('src')
+            urlparse_url = urlparse(response.url)
+            if 'http' not in image_link:
+                image_link = f"{urlparse_url.scheme}://{urlparse_url.netloc}{image_link}"
+            href_image["link"] = image_link
             href_image["image_contextLink"] = response.url
             href_image["referer"] = response.request.headers.get("Referer", b"").decode("utf-8", "ignore")
-            # 🚀 优化尺寸提取逻辑（建议异步下载图片头信息）
-            href_image["image_height"], href_image["image_height"] = self.extract_image_dimensions(link.text)
+            href_image["image_height"], href_image["image_width"] = self.extract_image_dimensions(str(img))
+            href_image['category'] = "HrefImage"
             yield href_image
 
-        # 2. 提取页面超链接（a标签的href）用于递归
+        # 2. 提取页面超链接（a标签的href���用于递归
         if current_depth < 10:  # 🚀 控制最大深度
-            page_extractor = LinkExtractor(
-                tags="a",
-                attrs="href",
-                allow=(r"\.html$", r"\.php$"),  # 示例：仅跟踪网页类型链接
-                deny_domains=("ads.com",)  # 排除广告域名
-            )
-            for link in page_extractor.extract_links(response):
+            for a_tag in soup.find_all('a', href=True):
+                href_link = a_tag['href']
+                urlparse_href = urlparse(href_link)
+                if not href_link.startswith('http'):
+                    href_link = f"{urlparse_href.scheme}://{urlparse_href.netloc}{href_link}"
                 # 🚀 递归生成新请求，深度+1
                 yield Request(
-                    url=link.url,
+                    url=href_link,
                     callback=self.parse_href_images,
                     meta={
                         "depth": current_depth + 1,  # 🚀 传递深度参数

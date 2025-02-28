@@ -2,78 +2,108 @@
 #
 # Don't forget to add your pipeline to the ITEM_PIPELINES setting
 # See: https://docs.scrapy.org/en/latest/topics/item-pipeline.html
+import hashlib
+from datetime import timedelta, datetime
 
-
-# useful for handling different item types with a single interface
-from itemadapter import ItemAdapter
-
-
-import requests
-from pymongo import MongoClient
+from pymongo import MongoClient, WriteConcern, errors
+from scrapy import Request
+from scrapy.pipelines.images import ImagesPipeline
+from twisted.internet import threads, defer
 
 from GoogleImageSpider.items import GoogleImageItem, HrefImageItem, DropItem
-import os
+
+
+class HybridImagePipeline(ImagesPipeline):
+    def get_media_requests(self, item, info):
+        yield Request(item['link'], meta={'item': item})
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        return f"{request.meta['item']['category']}/{request.url.split('/')[-1]}"
+
+    def item_completed(self, results, item, info):
+        for ok, x in results:
+            if ok:
+                item['local_path'] = x['path']
+        return item
 
 
 class GoogleImageDownloaderPipeline:
     def __init__(self, mongo_uri, mongo_db):
         self.mongo_uri = mongo_uri
         self.mongo_db = mongo_db
+        self.client = None
+        self.db = None
 
     @classmethod
     def from_crawler(cls, crawler):
-        # 从 settings.py 中获取 MongoDB 配置
         return cls(
             mongo_uri=crawler.settings.get('MONGO_URI'),
-            mongo_db=crawler.settings.get('MONGO_DATABASE', 'image_scraper')
+            mongo_db=crawler.settings.get('MONGO_DATABASE', 'image_database'),
         )
 
     def open_spider(self, spider):
-        # 连接 MongoDB
-        self.client = MongoClient(self.mongo_uri)
+        self.client = MongoClient(
+            self.mongo_uri,
+            wTimeoutMS=5000,
+            socketTimeoutMS=30000,
+            connectTimeoutMS=30000,
+            retryWrites=True,
+        )
         self.db = self.client[self.mongo_db]
 
     def close_spider(self, spider):
-        # 关闭 MongoDB 连接
         self.client.close()
 
+    @defer.inlineCallbacks
     def process_item(self, item, spider):
-
-        """处理 Item 数据"""
-        if isinstance(item, GoogleImageItem):
-            collection = self.db['google_images']
-            save_dir = 'google_images'
-        elif isinstance(item, HrefImageItem):
-            collection = self.db['href_images']
-            save_dir = 'href_images'
-        else:
-            raise DropItem("未知的 Item 类型")
-        # 下载图片
-        image_url = item['link']
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        image_name = image_url.split('/')[-1]
-        save_path = os.path.join(save_dir, image_name)
-
-        try:
-            response = requests.get(image_url, timeout=10)
-            if response.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(response.content)
-                item['local_path'] = save_path
-                print(f'图片下载成功: {save_path}')
-            else:
-                print(f'图片下载失败，状态码: {response.status_code}')
-        except Exception as e:
-            print(f'下载图片时出错: {e}')
-            return item
-
-        # 存储到 MongoDB
-        try:
-            collection.insert_one(dict(item))
-            print(f'图片信息已存储到 MongoDB: {item["title"]}')
-        except Exception as e:
-            print(f'存储到 MongoDB 时出错: {e}')
-
+        yield threads.deferToThread(self._process_item, item, spider)
         return item
+
+    def _process_item(self, item, spider):
+        try:
+            self._sanitize_item(item)
+            collection_name = self._get_collection_name(item)
+            collection = self.db[collection_name].with_options(
+                write_concern=WriteConcern(w='majority', j=True)
+            )
+
+            if self._is_duplicate(collection, item):
+                spider.crawler.stats.inc_value('duplicate_items')
+                return item
+
+            doc = self._build_document(item)
+            result = collection.insert_one(doc)
+
+            if result.acknowledged:
+                spider.logger.debug(f"插入成功 ID:{result.inserted_id}")
+                spider.crawler.stats.inc_value('mongodb/insert_count')
+            return item
+        except errors.DuplicateKeyError as e:
+            spider.logger.warn(f"重复数据: {str(e)}")
+        except errors.ConnectionFailure as e:
+            spider.logger.error(f"MongoDB连接失败: {str(e)}")
+        except Exception as e:
+            spider.logger.error(f"未知错误: {str(e)}", exc_info=True)
+
+    def _sanitize_item(self, item):
+        item['content_hash'] = hashlib.sha256(item['link'].encode()).hexdigest()
+
+    def _build_document(self, item):
+        return {
+            **dict(item),
+            'crawl_time': datetime.utcnow(),
+            'expire_at': datetime.utcnow() + timedelta(days=30),
+            '_version': '2025.1'
+        }
+
+    def _get_collection_name(self, item):
+        if isinstance(item, GoogleImageItem):
+            return 'google_images'
+        elif isinstance(item, HrefImageItem):
+            return 'href_images'
+        raise DropItem("未知Item类型")
+
+    def _is_duplicate(self, collection, item):
+        return collection.count_documents({
+            'content_hash': item['content_hash']
+        }, limit=1) > 0

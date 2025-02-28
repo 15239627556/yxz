@@ -16,11 +16,31 @@ NEWSPIDER_MODULE = "GoogleImageSpider.spiders"
 # USER_AGENT = "GoogleImageSpider (+http://www.yourdomain.com)"
 
 # Obey robots.txt rules
-ROBOTSTXT_OBEY = False
+ROBOTSTXT_OBEY = True
 
 # MONGO 配置
-MONGO_URI = 'mongodb://localhost:27017'
+import pymongo
+
+MONGO_URI = 'mongodb://172.18.100.163:27017'
 MONGO_DATABASE = 'image_database'
+MONGO_INDEXES = {  # 自动创建索引
+    'google_images': [('link', pymongo.ASCENDING), ('htmlTitle', pymongo.TEXT)],
+    'href_images': [('link', pymongo.ASCENDING)]
+}
+
+# 启用Redis的DupeFilter和Scheduler
+DUPEFILTER_CLASS = 'scrapy_redis.dupefilter.RFPDupeFilter'
+# SCHEDULER = 'scrapy_redis.scheduler.Scheduler'
+
+# Redis连接配置
+REDIS_URL = 'redis://localhost:6379'  # Redis服务器地址和端口
+REDIS_DB = 0  # Redis数据库编号（默认为0）
+
+# 允许请求队列在爬虫关闭时保留
+# SCHEDULER_PERSIST = True
+
+LOG_LEVEL = 'INFO'
+# LOG_FILE = 'scrapy.log'
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
 # CONCURRENT_REQUESTS = 32
@@ -28,7 +48,7 @@ MONGO_DATABASE = 'image_database'
 # Configure a delay for requests for the same website (default: 0)
 # See https://docs.scrapy.org/en/latest/topics/settings.html#download-delay
 # See also autothrottle settings and docs
-# DOWNLOAD_DELAY = 3
+DOWNLOAD_DELAY = 20
 # The download delay setting will honor only one of:
 # CONCURRENT_REQUESTS_PER_DOMAIN = 16
 # CONCURRENT_REQUESTS_PER_IP = 16
@@ -40,10 +60,17 @@ MONGO_DATABASE = 'image_database'
 # TELNETCONSOLE_ENABLED = False
 
 # Override the default request headers:
-# DEFAULT_REQUEST_HEADERS = {
-#    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-#    "Accept-Language": "en",
-# }
+# Set default request headers
+DEFAULT_REQUEST_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+}
+
+# Define global cookies
+DEFAULT_COOKIES = {
+    'Cookie': 'example_cookie_value'
+}
 
 # Enable or disable spider middlewares
 # See https://docs.scrapy.org/en/latest/topics/spider-middleware.html
@@ -53,9 +80,18 @@ MONGO_DATABASE = 'image_database'
 
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
-# DOWNLOADER_MIDDLEWARES = {
-#    "GoogleImageSpider.middlewares.GoogleimagespiderDownloaderMiddleware": 543,
-# }
+DOWNLOADER_MIDDLEWARES = {
+    "GoogleImageSpider.middlewares.GlobalProxyMiddleware": 100,
+    "GoogleImageSpider.middlewares.DomainDelayMiddleware": 543,
+    "GoogleImageSpider.middlewares.GlobalHeadersCookiesMiddleware": 600,
+}
+
+# 启用并设置Pipeline执行顺序（数值越小优先级越高）
+ITEM_PIPELINES = {
+    'GoogleImageSpider.pipelines.HybridImagePipeline': 200,
+    'GoogleImageSpider.pipelines.GoogleImageDownloaderPipeline': 300,
+
+}
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
