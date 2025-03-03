@@ -15,8 +15,20 @@ NEWSPIDER_MODULE = "GoogleImageSpider.spiders"
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
 # USER_AGENT = "GoogleImageSpider (+http://www.yourdomain.com)"
 
+# 启动命令
+# scrapy crawl GoogleImageSpider -s JOBDIR=crawls/GoogleImageSpider-1
+
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = True
+
+# href发散设置开关
+DIVERGE = False
+# NEXT_PAGE
+NEXT_PAGE = False
+
+# 日志级别
+LOG_LEVEL = 'INFO'
+# LOG_FILE = 'scrapy.log'
 
 # MONGO 配置
 import pymongo
@@ -24,7 +36,7 @@ import pymongo
 MONGO_URI = 'mongodb://172.18.100.163:27017'
 MONGO_DATABASE = 'image_database'
 MONGO_INDEXES = {  # 自动创建索引
-    'google_images': [('link', pymongo.ASCENDING), ('htmlTitle', pymongo.TEXT)],
+    'google_images': [('link', pymongo.ASCENDING)],
     'href_images': [('link', pymongo.ASCENDING)]
 }
 
@@ -39,8 +51,6 @@ REDIS_DB = 0  # Redis数据库编号（默认为0）
 # 允许请求队列在爬虫关闭时保留
 # SCHEDULER_PERSIST = True
 
-LOG_LEVEL = 'INFO'
-# LOG_FILE = 'scrapy.log'
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
 # CONCURRENT_REQUESTS = 32

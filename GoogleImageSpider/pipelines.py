@@ -3,6 +3,7 @@
 # Don't forget to add your pipeline to the ITEM_PIPELINES setting
 # See: https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 import hashlib
+import uuid
 from datetime import timedelta, datetime
 
 from pymongo import MongoClient, WriteConcern, errors
@@ -18,7 +19,10 @@ class HybridImagePipeline(ImagesPipeline):
         yield Request(item['link'], meta={'item': item})
 
     def file_path(self, request, response=None, info=None, *, item=None):
-        return f"{request.meta['item']['category']}/{request.url.split('/')[-1]}"
+        file_name = request.url.split('/')[-1]
+        if '.' not in file_name:
+            file_name = str(uuid.uuid4()).replace('-', '') + '.jpg'
+        return f"{request.meta['item']['category']}/{file_name}"
 
     def item_completed(self, results, item, info):
         for ok, x in results:

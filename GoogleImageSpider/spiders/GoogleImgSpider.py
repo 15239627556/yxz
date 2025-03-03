@@ -21,26 +21,25 @@ class GoogleImageSpider(scrapy.Spider):
     name = "GoogleImageSpider"
     domain_delay = 20
     redis_key = 'crawler:image_contextLink'
-    SEARCH_QUERY = '红细胞'
+    SEARCH_QUERY = 'Bone Marrow Microscope'
     CX = googleSettings.get_cx()
     API_KEY = googleSettings.get_api_key()
     API_URL = "https://www.googleapis.com/customsearch/v1"
 
     def start_requests(self):
         self.logger.info("✅ Start requests triggered")
-        api_url = "https://www.googleapis.com/customsearch/v1"
         params = {
             'q': self.SEARCH_QUERY,  # searchTerms
             'cx': self.CX,  # custom search engine ID, cx
             'key': self.API_KEY,  # API key
-            'searchType': r'image',  # 指定搜索类型为图片
+            'searchType': 'image',  # 指定搜索类型为图片
             'start': 1,  # startIndex
             'num': 10,  # count
             'safe': 'off',  # safe
             'inputEncoding': 'utf8',  # inputEncoding
             'outputEncoding': 'utf8'  # outputEncoding
         }
-        new_url = f"{api_url}?{urlencode(params)}"
+        new_url = f"{self.API_URL}?{urlencode(params)}"
         request = scrapy.Request(
             url=new_url,
             callback=self.parse,
@@ -72,30 +71,32 @@ class GoogleImageSpider(scrapy.Spider):
             yield image_item
 
             # 发起对image_contextLink的请求
-            context_link = item.get('image', {}).get('contextLink', '')
-            if context_link:
-                yield scrapy.Request(
-                    url=context_link,
-                    callback=self.parse_href_images,
-                    meta={'google_image_id': image_item['link']},
-                    errback=self.handle_error
-                )
-        # 先注释掉
+            # 根据配置文件中的DIVERGE参数，决定是否进行深度爬取
+            if self.settings.get('DIVERGE'):
+                context_link = item.get('image', {}).get('contextLink', '')
+                if context_link:
+                    yield scrapy.Request(
+                        url=context_link,
+                        callback=self.parse_href_images,
+                        meta={'google_image_id': image_item['link']},
+                        errback=self.handle_error
+                    )
         # 处理分页
-        next_page = data.get('queries', {}).get('nextPage', [])
-        if next_page:
-            params = {
-                'q': self.SEARCH_QUERY,  # searchTerms
-                'cx': self.CX,  # custom search engine ID, cx
-                'key': self.API_KEY,  # API key
-                'searchType': 'image',  # 指定搜索类型为图片
-                'start': next_page[0].get('startIndex'),  # startIndex
-                'num': next_page[0].get('count', 10),  # count
-                'safe': 'off',  # safe
-                'inputEncoding': 'utf8',  # inputEncoding
-                'outputEncoding': 'utf8'  # outputEncoding
-            }
-            yield scrapy.FormRequest(url=self.API_URL + urlencode(params), callback=self.parse,
+        if self.settings.get('NEXT_PAGE'):
+            next_page = data.get('queries', {}).get('nextPage', [])
+            if next_page:
+                params = {
+                    'q': self.SEARCH_QUERY,  # searchTerms
+                    'cx': self.CX,  # custom search engine ID, cx
+                    'key': self.API_KEY,  # API key
+                    'searchType': 'image',  # 指定搜索类型为图片
+                    'start': next_page[0].get('startIndex'),  # startIndex
+                    'num': next_page[0].get('count', 10),  # count
+                    'safe': 'off',  # safe
+                    'inputEncoding': 'utf8',  # inputEncoding
+                    'outputEncoding': 'utf8'  # outputEncoding
+                }
+                yield scrapy.Request(url=f"{self.API_URL}?{urlencode(params)}", callback=self.parse,
                                      errback=self.handle_error)
 
     def parse_href_images(self, response):
